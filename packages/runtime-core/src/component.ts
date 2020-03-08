@@ -1,5 +1,11 @@
 import { VNode, VNodeChild, isVNode } from './vnode'
-import { ReactiveEffect, shallowReadonly } from '@vue/reactivity'
+import {
+  reactive,
+  ReactiveEffect,
+  shallowReadonly,
+  pauseTracking,
+  resetTracking
+} from '@vue/reactivity'
 import {
   PublicInstanceProxyHandlers,
   ComponentPublicInstance,
@@ -109,7 +115,7 @@ export interface ComponentInternalInstance {
   accessCache: Data | null
   // cache for render function values that rely on _ctx but won't need updates
   // after initialized (e.g. inline handlers)
-  renderCache: (Function | VNode)[] | null
+  renderCache: (Function | VNode)[]
 
   // assets for fast resolution
   components: Record<string, Component>
@@ -187,7 +193,7 @@ export function createComponentInstance(
     effects: null,
     provides: parent ? parent.provides : Object.create(appContext.provides),
     accessCache: null!,
-    renderCache: null,
+    renderCache: [],
 
     // setup context properties
     renderContext: EMPTY_OBJ,
@@ -294,7 +300,7 @@ export function setupComponent(
   // setup stateful logic
   let setupResult
   if (shapeFlag & ShapeFlags.STATEFUL_COMPONENT) {
-    setupResult = setupStatefulComponent(instance, parentSuspense)
+    setupResult = setupStatefulComponent(instance, parentSuspense, isSSR)
   }
   isInSSRComponentSetup = false
   return setupResult
@@ -302,7 +308,8 @@ export function setupComponent(
 
 function setupStatefulComponent(
   instance: ComponentInternalInstance,
-  parentSuspense: SuspenseBoundary | null
+  parentSuspense: SuspenseBoundary | null,
+  isSSR: boolean
 ) {
   const Component = instance.type as ComponentOptions
 
@@ -341,12 +348,14 @@ function setupStatefulComponent(
 
     currentInstance = instance
     currentSuspense = parentSuspense
+    pauseTracking()
     const setupResult = callWithErrorHandling(
       setup,
       instance,
       ErrorCodes.SETUP_FUNCTION,
       [propsProxy, setupContext]
     )
+    resetTracking()
     currentInstance = null
     currentSuspense = null
 
@@ -354,7 +363,7 @@ function setupStatefulComponent(
       if (isInSSRComponentSetup) {
         // return the promise so server-renderer can wait on it
         return setupResult.then(resolvedResult => {
-          handleSetupResult(instance, resolvedResult, parentSuspense)
+          handleSetupResult(instance, resolvedResult, parentSuspense, isSSR)
         })
       } else if (__FEATURE_SUSPENSE__) {
         // async setup returned Promise.
@@ -367,17 +376,18 @@ function setupStatefulComponent(
         )
       }
     } else {
-      handleSetupResult(instance, setupResult, parentSuspense)
+      handleSetupResult(instance, setupResult, parentSuspense, isSSR)
     }
   } else {
-    finishComponentSetup(instance, parentSuspense)
+    finishComponentSetup(instance, parentSuspense, isSSR)
   }
 }
 
 export function handleSetupResult(
   instance: ComponentInternalInstance,
   setupResult: unknown,
-  parentSuspense: SuspenseBoundary | null
+  parentSuspense: SuspenseBoundary | null,
+  isSSR: boolean
 ) {
   if (isFunction(setupResult)) {
     // setup returned an inline render function
@@ -391,7 +401,7 @@ export function handleSetupResult(
     }
     // setup returned bindings.
     // assuming a render function compiled from template is present.
-    instance.renderContext = setupResult
+    instance.renderContext = reactive(setupResult)
   } else if (__DEV__ && setupResult !== undefined) {
     warn(
       `setup() should return an object. Received: ${
@@ -399,7 +409,7 @@ export function handleSetupResult(
       }`
     )
   }
-  finishComponentSetup(instance, parentSuspense)
+  finishComponentSetup(instance, parentSuspense, isSSR)
 }
 
 type CompileFunction = (
@@ -416,10 +426,17 @@ export function registerRuntimeCompiler(_compile: any) {
 
 function finishComponentSetup(
   instance: ComponentInternalInstance,
-  parentSuspense: SuspenseBoundary | null
+  parentSuspense: SuspenseBoundary | null,
+  isSSR: boolean
 ) {
   const Component = instance.type as ComponentOptions
-  if (!instance.render) {
+
+  // template / render function normalization
+  if (__NODE_JS__ && isSSR) {
+    if (Component.render) {
+      instance.render = Component.render as RenderFunction
+    }
+  } else if (!instance.render) {
     if (__RUNTIME_COMPILE__ && Component.template && !Component.render) {
       // __RUNTIME_COMPILE__ ensures `compile` is provided
       Component.render = compile!(Component.template, {
@@ -429,7 +446,7 @@ function finishComponentSetup(
       ;(Component.render as RenderFunction).isRuntimeCompiled = true
     }
 
-    if (__DEV__ && !Component.render && !Component.ssrRender) {
+    if (__DEV__ && !Component.render) {
       /* istanbul ignore if */
       if (!__RUNTIME_COMPILE__ && Component.template) {
         warn(
@@ -466,10 +483,6 @@ function finishComponentSetup(
     applyOptions(instance, Component)
     currentInstance = null
     currentSuspense = null
-  }
-
-  if (instance.renderContext === EMPTY_OBJ) {
-    instance.renderContext = {}
   }
 }
 

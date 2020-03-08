@@ -1,5 +1,12 @@
 import { expectError, expectType } from 'tsd'
-import { describe, defineComponent, PropType, ref, createApp } from './index'
+import {
+  describe,
+  defineComponent,
+  PropType,
+  ref,
+  reactive,
+  createApp
+} from './index'
 
 describe('with object props', () => {
   interface ExpectedProps {
@@ -60,9 +67,9 @@ describe('with object props', () => {
         d: {
           e: ref('hi')
         },
-        f: {
+        f: reactive({
           g: ref('hello' as GT)
-        }
+        })
       }
     },
     render() {

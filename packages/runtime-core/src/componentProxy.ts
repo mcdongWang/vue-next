@@ -1,14 +1,14 @@
 import { ComponentInternalInstance, Data, Emit } from './component'
 import { nextTick, queueJob } from './scheduler'
 import { instanceWatch } from './apiWatch'
-import { EMPTY_OBJ, hasOwn, isGloballyWhitelisted } from '@vue/shared'
+import { EMPTY_OBJ, hasOwn, isGloballyWhitelisted, NOOP } from '@vue/shared'
 import {
   ExtractComputedReturns,
   ComponentOptionsBase,
   ComputedOptions,
   MethodOptions
 } from './apiOptions'
-import { UnwrapRef, ReactiveEffect, isRef, isReactive } from '@vue/reactivity'
+import { ReactiveEffect, UnwrapRef } from '@vue/reactivity'
 import { warn } from './warning'
 import { Slots } from './componentSlots'
 import {
@@ -19,13 +19,14 @@ import {
 // public properties exposed on the proxy, which is used as the render context
 // in templates (as `this` in the render option)
 export type ComponentPublicInstance<
-  P = {},
-  B = {},
-  D = {},
+  P = {}, // props type extracted from props option
+  B = {}, // raw bindings returned from setup()
+  D = {}, // return from data()
   C extends ComputedOptions = {},
   M extends MethodOptions = {},
   PublicProps = P
 > = {
+  $: ComponentInternalInstance
   $data: D
   $props: PublicProps
   $attrs: Data
@@ -51,7 +52,6 @@ const publicPropertiesMap: Record<
 > = {
   $: i => i,
   $el: i => i.vnode.el,
-  $cache: i => i.renderCache || (i.renderCache = []),
   $data: i => i.data,
   $props: i => i.propsProxy,
   $attrs: i => i.attrs,
@@ -63,7 +63,7 @@ const publicPropertiesMap: Record<
   $options: i => i.type,
   $forceUpdate: i => () => queueJob(i.update),
   $nextTick: () => nextTick,
-  $watch: i => instanceWatch.bind(i)
+  $watch: __FEATURE_OPTIONS__ ? i => instanceWatch.bind(i) : NOOP
 }
 
 const enum AccessTypes {
@@ -72,8 +72,6 @@ const enum AccessTypes {
   PROPS,
   OTHER
 }
-
-const unwrapRef = (val: unknown) => (isRef(val) ? val.value : val)
 
 export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
   get(target: ComponentInternalInstance, key: string) {
@@ -104,7 +102,7 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
           case AccessTypes.DATA:
             return data[key]
           case AccessTypes.CONTEXT:
-            return unwrapRef(renderContext[key])
+            return renderContext[key]
           case AccessTypes.PROPS:
             return propsProxy![key]
           // default: just fallthrough
@@ -112,9 +110,9 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
       } else if (data !== EMPTY_OBJ && hasOwn(data, key)) {
         accessCache![key] = AccessTypes.DATA
         return data[key]
-      } else if (hasOwn(renderContext, key)) {
+      } else if (renderContext !== EMPTY_OBJ && hasOwn(renderContext, key)) {
         accessCache![key] = AccessTypes.CONTEXT
-        return unwrapRef(renderContext[key])
+        return renderContext[key]
       } else if (type.props != null) {
         // only cache other properties when instance has declared (this stable)
         // props
@@ -169,19 +167,7 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
     if (data !== EMPTY_OBJ && hasOwn(data, key)) {
       data[key] = value
     } else if (hasOwn(renderContext, key)) {
-      // context is already reactive (user returned reactive object from setup())
-      // just set directly
-      if (isReactive(renderContext)) {
-        renderContext[key] = value
-      } else {
-        // handle potential ref set
-        const oldValue = renderContext[key]
-        if (isRef(oldValue) && !isRef(value)) {
-          oldValue.value = value
-        } else {
-          renderContext[key] = value
-        }
-      }
+      renderContext[key] = value
     } else if (key[0] === '$' && key.slice(1) in target) {
       __DEV__ &&
         warn(

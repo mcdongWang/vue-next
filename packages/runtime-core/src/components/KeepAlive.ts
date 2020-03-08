@@ -10,7 +10,7 @@ import {
 import { VNode, cloneVNode, isVNode, VNodeProps } from '../vnode'
 import { warn } from '../warning'
 import { onBeforeUnmount, injectHook, onUnmounted } from '../apiLifecycle'
-import { isString, isArray, ShapeFlags } from '@vue/shared'
+import { isString, isArray, ShapeFlags, remove } from '@vue/shared'
 import { watch } from '../apiWatch'
 import { SuspenseBoundary } from './Suspense'
 import {
@@ -135,8 +135,7 @@ const KeepAliveImpl = {
       ([include, exclude]) => {
         include && pruneCache(name => matches(include, name))
         exclude && pruneCache(name => matches(exclude, name))
-      },
-      { lazy: true }
+      }
     )
 
     onBeforeUnmount(() => {
@@ -298,7 +297,6 @@ function injectToKeepAliveRoot(
 ) {
   injectHook(type, hook, keepAliveRoot, true /* prepend */)
   onUnmounted(() => {
-    const hooks = keepAliveRoot[type]!
-    hooks.splice(hooks.indexOf(hook), 1)
+    remove(keepAliveRoot[type]!, hook)
   }, target)
 }

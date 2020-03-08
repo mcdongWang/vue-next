@@ -249,8 +249,9 @@ export function applyOptions(
   } = options
 
   const renderContext =
-    instance.renderContext === EMPTY_OBJ
-      ? (instance.renderContext = {})
+    instance.renderContext === EMPTY_OBJ &&
+    (computedOptions || methods || watchOptions || injectOptions)
+      ? (instance.renderContext = reactive({}))
       : instance.renderContext
 
   const globalMixins = instance.appContext.mixins
@@ -302,12 +303,12 @@ export function applyOptions(
       __DEV__ && checkDuplicateProperties!(OptionTypes.COMPUTED, key)
 
       if (isFunction(opt)) {
-        renderContext[key] = computed(opt.bind(ctx))
+        renderContext[key] = computed(opt.bind(ctx, ctx))
       } else {
         const { get, set } = opt
         if (isFunction(get)) {
           renderContext[key] = computed({
-            get: get.bind(ctx),
+            get: get.bind(ctx, ctx),
             set: isFunction(set)
               ? set.bind(ctx)
               : __DEV__

@@ -16,20 +16,28 @@ const shallowReactiveGet = /*#__PURE__*/ createGetter(false, true)
 const readonlyGet = /*#__PURE__*/ createGetter(true)
 const shallowReadonlyGet = /*#__PURE__*/ createGetter(true, true)
 
-const arrayIdentityInstrumentations: Record<string, Function> = {}
+const arrayInstrumentations: Record<string, Function> = {}
 ;['includes', 'indexOf', 'lastIndexOf'].forEach(key => {
-  arrayIdentityInstrumentations[key] = function(
-    value: unknown,
-    ...args: any[]
-  ): any {
-    return toRaw(this)[key](toRaw(value), ...args)
+  arrayInstrumentations[key] = function(...args: any[]): any {
+    const arr = toRaw(this) as any
+    for (let i = 0, l = (this as any).length; i < l; i++) {
+      track(arr, TrackOpTypes.GET, i + '')
+    }
+    // we run the method using the orignal args first (which may be reactive)
+    const res = arr[key](...args)
+    if (res === -1 || res === false) {
+      // if that didn't work, run it again using raw values.
+      return arr[key](...args.map(toRaw))
+    } else {
+      return res
+    }
   }
 })
 
 function createGetter(isReadonly = false, shallow = false) {
   return function get(target: object, key: string | symbol, receiver: object) {
-    if (isArray(target) && hasOwn(arrayIdentityInstrumentations, key)) {
-      return Reflect.get(arrayIdentityInstrumentations, key, receiver)
+    if (isArray(target) && hasOwn(arrayInstrumentations, key)) {
+      return Reflect.get(arrayInstrumentations, key, receiver)
     }
     const res = Reflect.get(target, key, receiver)
     if (isSymbol(key) && builtInSymbols.has(key)) {
@@ -40,7 +48,8 @@ function createGetter(isReadonly = false, shallow = false) {
       // TODO strict mode that returns a shallow-readonly version of the value
       return res
     }
-    if (isRef(res)) {
+    // ref unwrapping, only for Objects, not for Arrays.
+    if (isRef(res) && !isArray(target)) {
       return res.value
     }
     track(target, TrackOpTypes.GET, key)
@@ -79,7 +88,7 @@ function createSetter(isReadonly = false, shallow = false) {
     const oldValue = (target as any)[key]
     if (!shallow) {
       value = toRaw(value)
-      if (isRef(oldValue) && !isRef(value)) {
+      if (!isArray(target) && isRef(oldValue) && !isRef(value)) {
         oldValue.value = value
         return true
       }
@@ -91,20 +100,10 @@ function createSetter(isReadonly = false, shallow = false) {
     const result = Reflect.set(target, key, value, receiver)
     // don't trigger if target is something up in the prototype chain of original
     if (target === toRaw(receiver)) {
-      /* istanbul ignore else */
-      if (__DEV__) {
-        const extraInfo = { oldValue, newValue: value }
-        if (!hadKey) {
-          trigger(target, TriggerOpTypes.ADD, key, extraInfo)
-        } else if (hasChanged(value, oldValue)) {
-          trigger(target, TriggerOpTypes.SET, key, extraInfo)
-        }
-      } else {
-        if (!hadKey) {
-          trigger(target, TriggerOpTypes.ADD, key)
-        } else if (hasChanged(value, oldValue)) {
-          trigger(target, TriggerOpTypes.SET, key)
-        }
+      if (!hadKey) {
+        trigger(target, TriggerOpTypes.ADD, key, value)
+      } else if (hasChanged(value, oldValue)) {
+        trigger(target, TriggerOpTypes.SET, key, value, oldValue)
       }
     }
     return result
@@ -116,12 +115,7 @@ function deleteProperty(target: object, key: string | symbol): boolean {
   const oldValue = (target as any)[key]
   const result = Reflect.deleteProperty(target, key)
   if (result && hadKey) {
-    /* istanbul ignore else */
-    if (__DEV__) {
-      trigger(target, TriggerOpTypes.DELETE, key, { oldValue })
-    } else {
-      trigger(target, TriggerOpTypes.DELETE, key)
-    }
+    trigger(target, TriggerOpTypes.DELETE, key, undefined, oldValue)
   }
   return result
 }
